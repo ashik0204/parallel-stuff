@@ -1,0 +1,13 @@
+\begin{table}[H]\centering\small
+\caption{P1 dynamic assignment with the best chunk size: time (ms) vs.\ threads and block size ($2^{22}$ inserts).}\label{tab:p1dyn}
+\begin{tabular}{lrrrrr}
+\toprule
+threads $\backslash$ block size & 64 & 128 & 256 & 512 & $2^{10}$ \\
+\midrule
+$2^{16}$ & 1389 & 1478 & 1490 & 1506 & 1460 \\
+$2^{18}$ & 1399 & 1532 & 1516 & 1478 & 1397 \\
+$2^{20}$ & 1477 & 1509 & 1515 & 1469 & 1427 \\
+$2^{22}$ & 1375 & 1463 & 1484 & 1484 & \textbf{1370} \\
+\bottomrule
+\end{tabular}
+\end{table}

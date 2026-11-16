@@ -1,0 +1,22 @@
+# build outputs and generated data
+*.o
+*.bin
+ops*.txt
+graphs/
+tests/data/
+q1_p[0-9]
+q2_p[0-9]
+gen_graph_ops
+p1
+p2
+gen_ops
+
+q2_omp
+*.aux
+*.log
+*.out
+assignment3-cuda/q2-xTAy/q2_v1_basic
+assignment3-cuda/q2-xTAy/q2_v2_coalesced
+assignment3-cuda/q2-xTAy/q2_v3_tree
+assignment3-cuda/q2-xTAy/q2_v4_shmem
+assignment3-cuda/q2-xTAy/q2_v5_opt

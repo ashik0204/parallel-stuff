@@ -1,0 +1,15 @@
+\begin{table}[H]\centering\small
+\caption{P2: time (ms) vs.\ thread-group size and total threads (block size 256, $2^{22}$ inserts).}\label{tab:p2group}
+\begin{tabular}{lrrrr}
+\toprule
+group size $\backslash$ threads & $2^{20}$ & $2^{22}$ & $2^{24}$ & $2^{26}$ \\
+\midrule
+1 & 13671 & 3493 & 3429 & 3593 \\
+2 & 9008 & 3490 & 1884 & 1903 \\
+4 & 6945 & 3138 & 1225 & 1238 \\
+8 & 4953 & 2938 & 1488 & 941.4 \\
+16 & 2573 & 1635 & 787.3 & 585.5 \\
+32 & 1494 & 909.1 & 462.9 & \textbf{391.5} \\
+\bottomrule
+\end{tabular}
+\end{table}

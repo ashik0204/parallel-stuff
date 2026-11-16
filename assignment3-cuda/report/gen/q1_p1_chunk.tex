@@ -1,0 +1,18 @@
+\begin{table}[H]\centering\small
+\caption{P1 dynamic assignment: time (ms) vs.\ chunk size and total threads (block size 256, $2^{22}$ inserts).}\label{tab:p1chunk}
+\begin{tabular}{lrrrr}
+\toprule
+chunk $\backslash$ threads & $2^{16}$ & $2^{18}$ & $2^{20}$ & $2^{22}$ \\
+\midrule
+1 & 1497 & 1590 & \textbf{1427} & 1542 \\
+2 & 2070 & 2000 & 2068 & 2183 \\
+4 & 2904 & 2487 & 2520 & 2782 \\
+8 & 3674 & 4106 & 3572 & 3985 \\
+16 & 5629 & 5069 & 4727 & 4640 \\
+32 & 8501 & 7128 & 10341 & 5503 \\
+64 & 11211 & 9356 & 9889 & 10403 \\
+128 & 17407 & 16898 & 14511 & 15746 \\
+256 & 17465 & 15540 & 17187 & 19889 \\
+\bottomrule
+\end{tabular}
+\end{table}

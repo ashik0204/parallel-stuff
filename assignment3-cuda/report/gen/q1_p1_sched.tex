@@ -1,0 +1,12 @@
+\begin{table}[H]\centering\small
+\caption{P1: best configuration of each task-assignment scheme ($2^{22}$ inserts).}\label{tab:p1sched}
+\begin{tabular}{lrrrrr}
+\toprule
+assignment & threads & blocks & block size & time (ms) & Mops/s \\
+\midrule
+static & $2^{22}$ & 16384 & 256 & 1464 & 2.87 \\
+cyclic & $2^{22}$ & 32768 & 128 & 1461 & 2.87 \\
+dynamic (chunk 1) & $2^{22}$ & 4096 & 1024 & 1370 & 3.06 \\
+\bottomrule
+\end{tabular}
+\end{table}

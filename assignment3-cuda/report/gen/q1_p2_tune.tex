@@ -1,0 +1,12 @@
+\begin{table}[H]\centering\small
+\caption{P2 with the best group size: time (ms) vs.\ threads and block size ($2^{22}$ inserts).}\label{tab:p2tune}
+\begin{tabular}{lrrrrr}
+\toprule
+threads $\backslash$ block size & 64 & 128 & 256 & 512 & $2^{10}$ \\
+\midrule
+$2^{22}$ & 901.3 & 860.9 & 886.9 & 899.9 & 997.8 \\
+$2^{24}$ & 536.3 & 448.2 & 470.4 & 504.4 & 682.7 \\
+$2^{26}$ & 448.0 & \textbf{351.0} & 386.2 & 392.0 & 585.6 \\
+\bottomrule
+\end{tabular}
+\end{table}

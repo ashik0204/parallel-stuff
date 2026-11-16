@@ -1,0 +1,229 @@
+\subsubsection*{P1: static vs.\ dynamic assignment}
+\inputif{q1_p1_static.tex}
+\inputif{q1_p1_cyclic.tex}
+\inputif{q1_p1_chunk.tex}
+\inputif{q1_p1_dyn.tex}
+\inputif{q1_p1_sched.tex}
+
+\begin{itemize}
+\item \textbf{Static and cyclic assignment depend strongly on the thread count}
+  (Tables~\ref{tab:p1static}, \ref{tab:p1cyclic}): from $2^{16}$ to $2^{22}$
+  threads the time drops from 9--14~s to about 1.5~s (3 repetitions per configuration). With few threads, each thread
+  owns a fixed list of many operations that it must finish alone. The cost of an
+  operation varies a lot (a few probes early on, thousands of probes
+  when the table is nearly full), so the threads that happen to own expensive
+  operations decide the run time while the others have finished and sit idle (load
+  imbalance). Static assignment is only good when every thread gets a single
+  operation ($2^{22}$ threads $=$ number of operations). Then the hardware
+  block scheduler does the balancing: as soon as a block finishes, a new one
+  starts in its place.
+\item \textbf{Dynamic assignment with small chunks is insensitive to the thread
+  count} (Table~\ref{tab:p1dyn}: 1.37--1.53~s for every configuration from
+  $2^{16}$ to $2^{22}$ threads), because a thread that finishes early simply takes
+  more work. Even $2^{16}$ threads (only 2.7$\times$ the
+  \devmaxresidentthreads{} resident threads) are enough.
+\item \textbf{The optimal chunk size is 1} (Table~\ref{tab:p1chunk}), and the time
+  rises steadily with the chunk size (about 1.4~s at chunk 1, about 17~s at chunk 256).
+  We expected larger chunks to help, as they do on the CPU, where they amortise the
+  cost of the shared counter, but here the opposite happened. We think there are two
+  reasons. (i) The \texttt{atomicAdd} on one counter is
+  cheap compared with a single operation here (hundreds to thousands of
+  dependent memory accesses), so there is nothing to amortise. (ii) Operations become more expensive the
+  fuller the table is, so the last chunks handed out are the most
+  expensive ones. A large last chunk makes one thread execute many of the most expensive
+  operations \emph{sequentially} at the end, while the rest of the GPU is idle. Chunk 1
+  minimises this tail.
+\item \textbf{Block size} has only a second-order effect for P1 (Table~\ref{tab:p1dyn}):
+  a thread does not cooperate with the other threads of its block, so the block
+  size only affects how many blocks fit on an SM. 1024 was marginally best and
+  is used below.
+\item Best P1 configurations (Table~\ref{tab:p1sched}): dynamic (chunk \ponechunk)
+  \ponedynamicms~ms, static \ponestaticms~ms, cyclic \ponecyclicms~ms. With one operation per
+  thread the three schemes are nearly identical; dynamic wins slightly and, more
+  importantly, does not need the thread count to match the operation count.
+\end{itemize}
+
+\subsubsection*{P2: thread-group size}
+\inputif{q1_p2_group.tex}
+\inputif{q1_p2_tune.tex}
+
+\begin{itemize}
+\item \textbf{The larger the group, the faster} (Table~\ref{tab:p2group}); $g=32$ is
+  optimal at every thread count. A group of $g$ lanes examines $g$ consecutive
+  slots with one coalesced load, so a probe sequence of length $L$ needs about $L/g$
+  load instructions, ballots and loop iterations instead of $L$. With $g=32$ each
+  probe step consumes exactly one 128-byte line, i.e.\ every byte that is
+  fetched is used. Going from $g=16$ to $g=32$ still saves about a third of the time. Probe
+  sequences in a full table are long (hundreds to thousands of slots), so
+  even 32-slot windows are mostly useful.
+\item \textbf{$g=1$ is about 2.5$\times$ slower than P1}, although it also uses one
+  thread per operation. Each lane of a warp is its own group and runs its own probe loop
+  containing \texttt{\_\_ballot\_sync}/\texttt{\_\_shfl\_sync} with a one-lane mask. Our
+  explanation is that these synchronising intrinsics stop the compiler from running the
+  32 independent loops of a warp as one predicated SIMD loop (as it does for P1), so
+  the scheduler executes the lanes' loops as separate sub-warps (independent
+  thread scheduling, lecture 6) and SIMD efficiency drops. We did not confirm this by looking at the generated code.
+\item \textbf{Many more threads than can be resident help P2}: the best thread
+  count is $2^{26}$, i.e.\ $2^{21}$ groups of 32 for $2^{22}$ operations, so each group
+  gets only two operations. Like the static P1, P2 assigns operations to
+  groups statically (cyclically). Our understanding is that making the work per group as
+  small as possible lets the block scheduler balance the load, which removes most of
+  the slow tail caused by the expensive late inserts. With $2^{20}$ threads (one group per 128 operations) P2
+  is 4$\times$ slower than with $2^{26}$.
+\item \textbf{Block size}: 128 is best (Table~\ref{tab:p2tune}). 1024-thread blocks
+  are worse. Our explanation is that a block can only be replaced when \emph{all} of its 32 warps are
+  done, so one warp stuck on a long probe sequence holds 1024 thread slots of the
+  SM idle. Smaller blocks release their resources sooner. Below 128 the per-SM
+  limit of \devmaxblockspersm{} blocks keeps the SM from being filled (16 blocks
+  $\times$ 64 threads = 1024 $<$ \devmaxthreadspersm).
+\end{itemize}
+
+\subsubsection*{P2 with dynamic group assignment}
+\inputif{q1_p2dyn_chunk.tex}
+\inputif{q1_p2dyn_group.tex}
+
+\begin{itemize}
+\item \textbf{Dynamic assignment removes static P2's dependence on the thread
+  count} (Table~\ref{tab:p2dynchunk}). With chunk 1 the time is 260--266~ms for
+  every thread count from $2^{16}$ to $2^{24}$, whereas static P2 needs
+  $2^{26}$ threads to reach 351~ms; with $2^{16}$ threads it takes 4.0~s, about
+  15$\times$ longer than dynamic P2 with the same number of threads. Static P2 balanced the expensive late inserts only indirectly, by
+  making the work per group so small that the block scheduler could balance it.
+  A shared counter balances it directly: a group that finishes early takes the
+  next operation.
+\item \textbf{The best dynamic P2 (\ptwodynbestms~ms) takes 26\% less time than the best
+  static P2 (\ptwobestms~ms)}, even though we tried static P2 with every thread
+  count. We think the reason is that static P2 needs 524\,288 blocks to balance its
+  load, and most of them start, find no work and exit, while dynamic P2 does the same
+  balancing with a few thousand long-lived groups.
+\item \textbf{Chunk 1 is optimal}, and the time grows steadily with the chunk
+  size (about 260~ms at chunk 1, about 550~ms at chunk 16), for the same reason as
+  in P1. One \texttt{atomicAdd} per group is negligible compared with an operation
+  (tens to thousands of probes), while larger chunks put many of the most
+  expensive operations, the last inserts into the full table, into one group's
+  sequential tail.
+\item \textbf{Group size 32 remains best} (Table~\ref{tab:p2dyngroup}). This is
+  what we expected, since the coalescing advantage of wide windows should not depend
+  on how operations are assigned to groups.
+\end{itemize}
+
+\subsubsection*{P1 vs.\ P2}
+\inputif{q1_final.tex}
+
+Table~\ref{tab:q1final} compares the best P1 (dynamic, chunk~\ponechunk, block size
+\ponebs) with the best static P2 (group~\ptwogroup, block size \ptwobs) and the
+best dynamic P2 (chunk~\ptwodynchunk, group~\ptwodyngroup), each at its best
+thread count, for the five operation mixes and $2^{20}$, $2^{22}$ and $2^{24}$
+operations. \qoneallverified{} runs passed verification. Dynamic P2 is the fastest
+program in every case: \qonedynspeedupmin--\qonedynspeedupmax$\times$ faster than P1
+and \qonedynvsstaticmin--\qonedynvsstaticmax$\times$ faster than static P2.
+\begin{itemize}
+\item \textbf{P2 is faster in every case, by \qonespeedupmin--\qonespeedupmax$\times$.}
+  We think the difference comes mainly from memory-access coalescing and cooperation. P2 finds the target slot of an
+  operation in $L/32$ steps, each a fully used 128-byte access, while a P1 thread walks the same
+  $L$ slots one dependent load at a time. In addition, the 32 lanes of a P1 warp probe 32
+  unrelated parts of the table, so every warp load touches up to 32 different lines
+  (memory divergence: the warp waits for the slowest lane). P1's loads still
+  hit in L1 for consecutive slots of the same thread, which is probably why the gap
+  is ``only'' 4--6$\times$ and not 32$\times$.
+\item \textbf{Time grows much faster than the operation count}: for 100\% inserts,
+  $2^{20}\to2^{22}\to2^{24}$ operations take 0.15~s $\to$ 1.4~s $\to$ 67~s (P1)
+  and 31~ms $\to$ 0.35~s $\to$ 14.9~s (static P2), although the operation count only
+  grows by 4$\times$ each time. The table is sized to the number of distinct keys, so
+  it ends 100\% full. For linear probing the total cost of filling a table
+  completely grows like $n^{3/2}$: the last few percent of inserts have to walk
+  very large clusters that keep merging. At $2^{24}$ the growth is even steeper,
+  and we think the effect described next is part of the reason.
+\item \textbf{Modulo bias of $h(k)=k \bmod n$ seems to matter in a full table.} Keys are uniform in
+  $[0,N)$ with $N=2^{30}$. If $N/n$ is not an integer, $k \bmod n$ is not uniform: with
+  $N/n = q + f$ the first $f\cdot n$ slots receive keys with probability proportional to
+  $q+1$, the rest proportional to $q$. In a half-empty table such a small imbalance
+  ($1/q$) probably does not matter. In a 100\% full table, however, every surplus key of the
+  over-loaded region must overflow into the under-loaded one, which we expected to
+  create one very large cluster that all late inserts walk through. We tested this
+  with P2 on $2^{23}$ distinct insert keys:
+  \begin{center}\small
+  \begin{tabular}{rrr}\toprule
+  table size $n$ & $N/n$ & time (ms)\\\midrule
+  8\,388\,608 ($=2^{23}$) & 128.000 & 667\\
+  8\,388\,000 & 128.009 & 695\\
+  8\,356\,092 & 128.5 & 2374\\\bottomrule
+  \end{tabular}
+  \end{center}
+  The same keys run $3.5\times$ slower when $N/n$ has fractional part $\frac12$ (half the
+  table over-loaded by $1/128$). For our workloads $N/n\approx1024.5$, $256.5$ and $64.5$
+  for $2^{20}$, $2^{22}$ and $2^{24}$ operations: the relative imbalance $1/q$ grows
+  from 0.1\% to 1.6\%, which we think explains at least part of the extra jump at
+  $2^{24}$.
+\item \textbf{Effect of the operation mix.} Most of the cost comes from the inserts,
+  because they fill the table, but the deletes and searches are not free either:
+  \begin{itemize}
+  \item 100/0/0 (all inserts) is the most expensive mix at $2^{22}$ and $2^{24}$, but
+    not at $2^{20}$, where the two 80\% mixes take longer for all three programs
+    (28--30\% for P1, 9--18\% for static P2 and 65--66\% for dynamic P2). We first thought this was due to the particular key sets, so we
+    generated eight random key sets for each of these mixes at $2^{20}$ (P2 dynamic,
+    $2^{20}$ threads). With every one of the eight seeds both 80\% mixes were slower than
+    100/0/0 (25.9--31.0~ms against 23.3--28.9~ms), so the effect is real. Timing the insert phase alone (by giving the
+    programs only the insert count), the inserts of an 80\% list take 17.6--19.3~ms
+    against 25.2--28.0~ms for a 100\% list, a ratio of about 0.7, close to the
+    $0.8^{3/2}\approx0.72$ that the $n^{3/2}$ growth predicts. The extra 11--12~ms
+    come from the 20\% deletes or searches: in a full table each of them walks from
+    the key's home slot to the key, which is a long way on average. We measured the
+    same split at the larger sizes (P2 dynamic, best thread count). The deletes or
+    searches cost 58--69\%, 41--49\% and 26--27\% of the time of the insert phase
+    at $2^{20}$, $2^{22}$ and $2^{24}$, so their share shrinks as the table grows. At
+    the same time the inserts of an 80\% list take only 0.43 ($2^{22}$) and 0.51
+    ($2^{24}$) of the time of a 100\% list, much less than the 0.72 of the $n^{3/2}$
+    rule. All these lists have $N/n$ with a fractional part of about 0.5, so we think
+    the reason is the modulo bias described above: the large cluster it creates grows
+    quickly with $n$ and makes the larger 100\% table relatively more expensive. So
+    at $2^{22}$ and $2^{24}$ the extra inserts of the 100\% list cost more than the
+    deletes or searches of the 80\% lists, and 100/0/0 is the most expensive mix.
+  \item 50/50/0 is the cheapest at $2^{24}$, which surprised us at first. Every delete
+    needs its own distinct key, so in this mix all inserted keys are distinct and
+    $n$ is \emph{exactly} $2^{23}$. Then $N/n=128$ is an integer, there is no modulo
+    bias, and the insert phase costs only 0.67~s instead of 2.39~s for the equally
+    long insert phase of 50/0/50, whose $n$ is slightly smaller than $2^{23}$
+    because of duplicate keys (we timed the insert phases separately). Each
+    delete is a positive search plus one CAS.
+  \item 50/0/50 and 50/50/0 are otherwise similar (at $2^{20}$ and $2^{22}$, where
+    neither $n$ is a power of two): both do the same inserts, and a positive search
+    and a delete both walk to the key and stop.
+  \item 80/20/0 and 80/0/20 cost almost the same, for the same reason; a delete
+    adds only one CAS.
+  \end{itemize}
+\item \textbf{The speedup of P2 is somewhat smaller at $2^{24}$ (3.9--4.5$\times$) than at
+  $2^{20}$ (4.8--5.8$\times$).} We are not completely sure why. One possible
+  explanation is that at the largest size both programs spend most of their time
+  walking very long clusters near the end, where P1's sequential walk also uses whole
+  cache lines through L1, and both programs compete for the few remaining empty
+  slots.
+\end{itemize}
+
+\subsubsection*{Robustness across random key sets}
+\inputif{q1_seeds.tex}
+
+To check that the conclusions do not depend on one particular random operation
+list, we regenerated the $2^{22}$-operation lists of all five mixes with two
+further seeds and ran the best configuration of each program on them
+(Table~\ref{tab:q1seeds}).
+\begin{itemize}
+\item \textbf{Absolute times vary by up to about 50\% between key sets} of the same
+  mix (6--47\% depending on mix and program, e.g.\ 50/50/0: 871--1181~ms for P1). Our first guess was the modulo bias
+  above, but the data does not support it. For every mix the three seeds have almost the
+  same $N/n$ (fractional part $\approx0.49$), and in the 50/50/0 mix $n=2^{21}$
+  exactly, so there is no bias at all, yet that mix varies by 35\%. We think the
+  variation comes from the 100\% full linearly probed table itself: its cost is
+  dominated by the few largest clusters, which the last inserts must walk, and the
+  size of those clusters depends strongly on the exact keys (the cost seems to be
+  heavy-tailed).
+\item \textbf{The comparisons are stable}: P1/P2 lies in
+  \qoneseedratioonemin--\qoneseedratioonemax$\times$ and static/dynamic P2 in
+  \qoneseedratiotwomin--\qoneseedratiotwomax$\times$ across all seeds, and the
+  ranking dynamic P2 $<$ static P2 $<$ P1 holds in all \qoneseedsameorder{} of
+  the 15 seed/mix combinations. So we think the conclusions of this section do not
+  depend on the particular random lists. Absolute times of a single list should
+  be read with this key-set variation (up to about 50\%) in mind; the repetitions
+  (3--5 per point) only remove timing noise, not this variation.
+\end{itemize}
+

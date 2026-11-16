@@ -1,0 +1,14 @@
+\begin{table}[H]\centering\small
+\caption{Effect of each optimisation ($m=n=2^{14}$). Left: at the best thread count of the basic program ($t=$\,\qtwobasicbestt, best block size per version). Right: each version at its own best $(t$, block size$)$.}\label{tab:q2versions}
+\begin{tabular}{lrrrr|rrrr}
+\toprule
+version & bs & ms & GB/s & speedup & best $t$ & bs & ms & GB/s \\
+\midrule
+basic (contiguous chunks) & 32 & 16.67 & 64.41 & 1.00 & $2^{16}$ & 32 & 16.62 & 64.61 \\
++ coalescing & 64 & 6.777 & 158.46 & 2.46 & $2^{16}$ & 128 & 6.630 & 161.96 \\
++ tree reduction (global mem.) & 512 & 7.234 & 148.44 & 2.30 & $2^{19}$ & 128 & 6.449 & 166.53 \\
++ shared memory & 512 & 6.807 & 157.76 & 2.45 & $2^{20}$ & 512 & 6.349 & 169.13 \\
++ float4, ILP, warp shuffle & 512 & 6.274 & 171.16 & 2.66 & $2^{17}$ & 1024 & 6.269 & 171.30 \\
+\bottomrule
+\end{tabular}
+\end{table}

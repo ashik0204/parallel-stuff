@@ -1,0 +1,326 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=2cm]{geometry}
+\usepackage{booktabs,float,amsmath,array}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{pdftitle={CS433 Assignment 3 Report, Group 1},pdfauthor={Ashik Stenny, Spandan Pati, Vedhanth Balasubramanian}}
+\setlength{\parskip}{4pt}\setlength{\parindent}{0pt}
+\IfFileExists{gen/macros.tex}{\input{gen/macros.tex}}{}
+\newcommand{\inputif}[1]{\IfFileExists{gen/#1}{\input{gen/#1}}{\textit{[table #1 not generated yet]}}}
+
+\title{CS433 Assignment 3: Report\\\large Group \#1}
+\author{Ashik Stenny \and Spandan Pati \and Vedhanth Balasubramanian}
+\date{November 2026}
+\begin{document}
+\maketitle
+
+%=====================================================================
+\section{Experimental setup}
+We ran all experiments on one of our laptops with the charger connected. We
+noticed that on battery the GPU runs at roughly half its clock, so we did not use
+any runs made on battery.
+
+\begin{table}[H]\centering\small
+\caption{Hardware and software.}\label{tab:setup}
+\begin{tabular}{ll}\toprule
+GPU & \devname{} (compute capability \devcomputecapability) \\
+SMs & \devsms{}, max \devmaxthreadspersm{} threads and \devmaxblockspersm{} blocks per SM \\
+Max resident threads & \devmaxresidentthreads{} (= \devsms{} $\times$ \devmaxthreadspersm) \\
+Memory & \devglobalmemmb{} MB GDDR6, \devmembuswidthbits-bit bus, peak \devpeakbandwidthgbs{} GB/s \\
+L2 cache / shared memory & \devlcachekb{} KB / \devsharedmemperblockkb{} KB per block \\
+CPU & AMD Ryzen 7 5800HS, 8 cores / 16 threads \\
+Software & CUDA 12.4 (\texttt{nvcc -O3 -arch=sm\_86}), gcc \texttt{-O3 -march=native -fopenmp} \\
+\bottomrule\end{tabular}\end{table}
+
+GPU kernels in Problem~1 are timed with CUDA events; Problem~2 uses
+\texttt{gettimeofday} around launch + \texttt{cudaDeviceSynchronize}/copy of the
+result, so the time includes everything needed to get the final scalar on the
+host. Every time in the final comparison tables and the best-configuration tables
+is the average of 3--5 repetitions; only the two large exploratory sweeps (P1
+chunk size and P2 group size versus thread count) use one repetition per point.
+Repeated runs of the same configuration are not identical. In the final comparison
+table the minimum and the average of the repetitions differ by about 2\% on average
+and by at most about 10\%. The spread is largest (up to about 13\%) for P1 with static
+assignment and few threads, where the run time depends on which threads happen to get
+the expensive late inserts, and that changes from run to run. These differences are
+much smaller than the differences we compare (mostly factors of 1.3 to 15), so we
+think they do not change our conclusions. Before and after every series of runs we also ran a short bandwidth
+test to check that the GPU was at full clock (about 170~GB/s). We added this check
+after we found that some runs made after a suspend/resume of the laptop were
+throttled; those runs were discarded and repeated.
+
+%=====================================================================
+\section{How to compile and run}
+We submit three source files for Problem~1 (\texttt{p1.cu}, \texttt{p2.cu},
+\texttt{gen\_ops.c}) and six for Problem~2 (\texttt{q2\_v1\_basic.cu} to
+\texttt{q2\_v5\_opt.cu} and \texttt{q2\_omp.c}). Each one is self-contained (the helper
+code shared by the programs of a problem is pasted into each file), so it compiles on
+its own and no Makefile is needed. The scripts we used to run the experiments and to
+make the tables are not part of the submission.
+\texttt{-arch=native} (CUDA $\ge$ 11.6) compiles for the GPU of the machine; with
+an older \texttt{nvcc} use the GPU's architecture instead, e.g.\ \texttt{-arch=sm\_61}
+(GTX 1080) or \texttt{-arch=sm\_86} (A40, RTX 30xx).
+
+\textbf{Problem 1} (directory \texttt{q1/}):
+{\footnotesize\begin{verbatim}
+gcc  -O2 -o gen_ops gen_ops.c
+nvcc -O3 -arch=native -std=c++14 -o p1 p1.cu
+nvcc -O3 -arch=native -std=c++14 -o p2 p2.cu
+
+./gen_ops <opfile> <nops> <ins%> <del%> <srch%> [N=2^30] [seed=12345]
+./p1 <opfile> <nops> <nthreads> [blocksize=1024] [static|cyclic|dynamic] [chunk=1]
+./p2 <opfile> <nops> <nthreads> [blocksize=128] [groupsize=32] [static|dynamic] [chunk=1]
+
+# example: 2^22 operations, 80% insert / 20% search, both programs at their best settings
+./gen_ops ops.bin 4194304 80 0 20
+./p1 ops.bin 4194304 4194304 1024 dynamic 1
+./p2 ops.bin 4194304 67108864 128 32 dynamic 1
+\end{verbatim}}
+The first three arguments of \texttt{p1}/\texttt{p2} are the ones the assignment
+prescribes (operation file, number of operations, thread count); the optional ones
+default to the best values found in Section~\ref{sec:q1res}, except that \texttt{p2}
+uses the static (cyclic) group schedule unless \texttt{dynamic} is given; the best
+P2 configuration is \texttt{128 32 dynamic 1}, as in the example. Each run prints the
+time (average and minimum over the repetitions) and \texttt{verify=OK} once every
+return value and the final table have been checked (paragraph \emph{Verification} in Section~\ref{sec:q1alg}).
+
+\textbf{Problem 2} (directory \texttt{q2/}; $m$, $n$, $t$ powers of two):
+{\footnotesize\begin{verbatim}
+nvcc -O3 -arch=native -Xcompiler -fopenmp -lgomp -o q2_v1_basic q2_v1_basic.cu
+#   ... the same for q2_v2_coalesced, q2_v3_tree, q2_v4_shmem, q2_v5_opt
+gcc  -O3 -march=native -fopenmp -o q2_omp q2_omp.c -lm
+
+./q2_v1_basic <m> <n> <t> [blocksize]     # contiguous chunk per thread
+./q2_v2_coalesced ...                     # + memory access coalescing
+./q2_v3_tree ...                          # + tree reduction
+./q2_v4_shmem ...                         # + shared memory
+./q2_v5_opt ...                           # + float4 loads, ILP, warp shuffle (best)
+./q2_omp <m> <n> <t>                      # OpenMP version used for the comparison
+./q2_v5_opt 16384 16384 65536             # example
+\end{verbatim}}
+The environment variable \texttt{REPS} sets the number of timed repetitions
+(default 5 for Problem~1, 3 for Problem~2).
+
+%=====================================================================
+\section{Problem 1: concurrent open-addressed hash table}
+
+\subsection{Operation lists}
+\texttt{gen\_ops} writes a binary file of \texttt{(op, key)} pairs of 32-bit
+integers. Insert keys are \texttt{random() \% N} with $N=2^{30}$, which is
+$64\times$--$1024\times$ larger than the table sizes used ($2^{20}$--$2^{24}$).
+The list is segregated: all inserts, then all deletes, then all searches.
+Delete keys are \emph{distinct} keys that were inserted (a second delete of
+the same key would return 0); search keys are drawn from inserted keys that
+are not deleted. Thus every delete and search returns 1. For the
+50\%/50\% insert/delete mix every inserted key must be distinct, so the
+generator redraws the (few) duplicate insert keys until there are enough
+distinct keys. A redrawn key can itself collide with an existing key (probability
+about $n/N$, i.e.\ 0.1--1.6\% here), so each round of redraws is followed by an
+exact recount of the distinct keys, and further rounds run until the count is
+sufficient (2--3 rounds in practice). This is also why the generator rejects mixes
+with more deletes than possible keys ($n_d > N$), for which it could never finish.
+The table size $n$ is computed by the programs as the number
+of distinct insert keys (sorting on the host, not timed), and $h(k)=k \bmod n$.
+
+\subsection{Hash table algorithm and correctness}\label{sec:q1alg}
+The table is an \texttt{int} array with two reserved values,
+\texttt{EMPTY}$=-1$ (set by \texttt{cudaMemset(0xFF)}) and
+\texttt{TOMB}$=-2$ (a deleted key). All operations are lock-free:
+\begin{itemize}
+\item \textbf{insert($k$)}: probe from $h(k)$; if a slot holds $k$, return 0.
+  On an \texttt{EMPTY} slot do \texttt{atomicCAS(EMPTY}$\to k$): if it
+  succeeds, return 1; if it returns $k$, another thread has just inserted $k$
+  (return 0); otherwise another key won the slot and probing continues.
+  \textbf{Tombstones are reused:} the insert remembers the \emph{first} tombstone
+  on its path but keeps scanning until it has proven that $k$ is absent (it reaches
+  an \texttt{EMPTY} slot or has visited every slot), and only then claims that
+  tombstone with \texttt{atomicCAS(TOMB}$\to k$); if another key took it first,
+  the scan restarts.
+\item \textbf{delete($k$)}: probe until $k$ (then \texttt{atomicCAS}($k\to$\texttt{TOMB}),
+  return whether it succeeded) or \texttt{EMPTY} (return 0).
+\item \textbf{search($k$)}: probe until $k$ (1) or \texttt{EMPTY} (0).
+\end{itemize}
+A deleted slot becomes a tombstone rather than \texttt{EMPTY} so that the probe
+chains of other keys are not broken (a search for a key further along the chain
+must not stop at the deleted slot). We argue that a key can never end up in two slots: all
+inserters of $k$ walk the same probe sequence, the key slots they pass cannot
+change during an insert kernel, and they therefore all compete with a CAS for
+the same first free slot (the first tombstone, or the first \texttt{EMPTY} slot).
+The scan before reusing a tombstone is needed because $k$ may already be
+stored \emph{after} the tombstone. Within one kernel a slot only moves forward
+(\texttt{EMPTY}/\texttt{TOMB}$\to k$ in an insert kernel, $k\to$\texttt{TOMB} in
+a delete kernel), so as far as we can see a stale (e.g.\ L1-cached) read is
+harmless: the CAS that follows always sees the true value. Because $n$ equals the number of distinct
+keys, an insert of an absent key always finds a free slot: at most $n-1$ slots
+hold other keys. We use a CAS on the slot itself instead of a lock
+(\texttt{while(atomicCAS(\&lock,0,1));}), which would serialise the operations
+and, as discussed in lecture~6, can deadlock inside a warp on pre-Volta GPUs. We did
+not use \texttt{\_\_threadfence}: the only shared writes are single atomic CAS
+operations, and no thread depends on the ordering of two different writes, so we do
+not think a fence is needed.
+
+\textbf{Design decision: segment-wise execution.} The host splits the
+operation list into runs of identical operations and launches one kernel per
+run. A kernel boundary is a global barrier, so this gives \emph{sequential
+semantics} between operation types: every operation sees the effects of all
+earlier operations of a different type (e.g.\ a search always sees every insert
+before it). The expected result of every operation is then well defined and
+can be verified exactly. A segregated list (as required) has at most three runs,
+i.e.\ three kernel launches ($\approx$20~$\mu$s in total). A list that is not
+segregated is also processed correctly, one kernel per run (the program prints a
+warning), but every change of operation type costs a kernel launch of
+5--10~$\mu$s, so a fully mixed list would be dominated by launch overhead.
+Executing a mixed list in a single kernel would let an insert and a delete or
+search of the same key run concurrently. The outcome would then depend on timing
+(a search may or may not see a concurrent insert), the ``always returns 1''
+property of positive queries would no longer hold, and concurrent inserts and
+deletes of the same key would need a separate correctness argument. Since the
+assignment requires segregated lists, we did not implement that mode.
+
+\textbf{Verification} (after \emph{every} timed repetition, not timed). Before
+the runs, the host replays the operation list segment by segment with a sorted
+set of keys and derives the exact expected outcome for every key of every
+segment. Inside one segment all operations run concurrently, so the rule is
+per key: an insert segment must return 1 for exactly one occurrence of each
+key that was absent (and 0 for all others), a delete segment must return 1 for
+exactly one occurrence of each key that was present, and every search must
+return whether its key was present. Only \emph{which} of several duplicate
+operations wins is left open, since that depends on timing. After every run we
+check
+(i) every key group's return values against this plan,
+(ii) that the table contains \emph{exactly} the expected set of keys (none
+missing, none extra, none twice), and
+(iii) that every key is reachable from its home slot (no \texttt{EMPTY} slot in
+between, checked in one linear pass).
+This check is stricter than comparing totals (two wrong results of different keys
+cannot cancel out), and it also works for non-segregated lists. When we first
+introduced it, it found a bug in our earlier version: tombstones were never
+reused, so in a list that deletes and then re-inserts a key into a full table, the
+re-insert found no free slot. This cannot happen with segregated lists (all
+inserts precede all deletes), so no measured result was affected, but it led to
+the tombstone reuse described above. All runs reported below passed
+(column ``verified'' in Table~\ref{tab:q1final}). The programs were also checked
+on hand-made mixed lists (fill the table, delete half the keys, re-insert them,
+further deletes, inserts and searches) with every group size.
+
+\textbf{Load factor.} The table is sized to the number of distinct keys, so
+after the inserts it is 100\% full. With linear probing the expected cost of
+filling a table completely grows like $n^{3/2}$ (the last insertions must
+walk huge clusters), so the run time grows much faster than the number of
+operations, and it is dominated by the last few percent of inserts. This
+alone predicts $4^{3/2}=8\times$ the time for $4\times$ the operations, which fits
+the step from $2^{20}$ to $2^{22}$ (9.4$\times$ for P1), but not the step from
+$2^{22}$ to $2^{24}$ (48$\times$). We think at least part of the rest comes from the
+modulo bias of $h(k)$ discussed in Section~\ref{sec:q1res}.
+
+\subsection{P1: one thread per operation}
+Thread count $T$ = blocks $\times$ block size (command-line arguments). Three
+task assignments are implemented:
+\textbf{static} (block): thread $i$ gets the contiguous ops
+$[i\lceil c/T\rceil, (i+1)\lceil c/T\rceil)$;
+\textbf{cyclic} (static round-robin): thread $i$ gets ops $i, i+T, \dots$, so a
+warp reads 32 consecutive operation records (coalesced);
+\textbf{dynamic}: a global counter per kernel; each thread grabs a chunk of
+$C$ operations with \texttt{atomicAdd(counter, C)} until the list is exhausted.
+
+\subsection{P2: one thread group per operation}
+A group of $g\in\{1,2,4,8,16,32\}$ lanes of the same warp handles one
+operation. The group examines a window of $g$ consecutive slots at once: lane
+$l$ reads $T[s+l]$, so a probe step of a group is a single coalesced access (a
+32-lane group reads exactly one 128-byte line). The group first asks with
+\emph{one} \texttt{\_\_ballot\_sync} whether any lane saw $k$, \texttt{EMPTY} or
+\texttt{TOMB}. In a full table most windows contain only other keys, so the
+detailed ballots (\texttt{v==k}: found; \texttt{v==EMPTY}: end of chain;
+\texttt{v==TOMB}: reusable slot) run only for the few windows where something
+happens. This single-ballot test made P2 9--17\% faster than our first version,
+which always issued two ballots per window. For an insert the lowest empty lane
+(\texttt{\_\_ffs}) becomes the leader, performs the CAS and broadcasts the old
+value with \texttt{\_\_shfl\_sync}. If the CAS fails because another key took
+the slot, the next empty lane of the same window is tried, otherwise the window
+advances by $g$. Tombstones are tracked exactly as in P1 (the first one on the
+path, found with a ballot and broadcast by \texttt{\_\_shfl\_sync}).
+\texttt{gmask} contains only the lanes of the group, so different groups of a
+warp can be at different operations (independent thread scheduling on Volta+);
+all lanes of a group always execute the same operations in the same order, so
+every \texttt{\_sync} intrinsic is reached by the whole group.
+
+Operations are assigned to groups in one of two ways. \textbf{Static}
+(cyclic, the default): group $q$ takes operations $q, q+Q, \dots$ ($Q$ =
+number of groups). \textbf{Dynamic}: the first lane of the group takes a chunk
+of $C$ operations with \texttt{atomicAdd} on a per-kernel counter (one atomic per
+group) and broadcasts the start to the other lanes with \texttt{\_\_shfl\_sync}.
+
+\textbf{How these P2 improvements were found.} Both came out of our correctness
+work rather than from planned tuning. When the stricter verification
+exposed the tombstone bug, the P2 insert had to be restructured to track
+tombstones inside a window. Adding a third ballot (\texttt{v==TOMB}) to every
+window would have made every probe step more expensive, so we asked instead
+whether a window needs any detailed ballot at all. In a full table almost every
+window holds only other keys, so a single combined ballot answers that, and the
+detailed ballots run only rarely. We measured the old and the new P2 on the same
+workloads before accepting the change. P1 was unchanged (within 2\%), while P2 was
+9--17\% faster, so all P2 experiments were re-run with the new version. Re-examining
+P2's results for that re-run also made us question why static P2 needs
+$2^{26}$ threads (16 times more threads than operations, so only about two
+operations per group) to perform well. Our
+guess was load imbalance caused by the expensive late inserts, which led us to try
+dynamic group assignment: it removes that imbalance with a shared counter instead
+of relying on the block scheduler.
+
+\subsection{Results}\label{sec:q1res}
+All tuning runs use $2^{22}$ operations with 100\% inserts (the most
+expensive mix; all mixes are at least 50\% inserts).
+
+\IfFileExists{q1_results.tex}{\input{q1_results.tex}}{}
+
+%=====================================================================
+\section{Problem 2: $x^TAy$}
+
+\subsection{Programs}
+$A$ is stored row-major; element $e$ of the flattened matrix has
+$i=e\gg\log_2 n$ and $j=e\,\&\,(n-1)$. A separate \texttt{init\_kernel}
+fills $A$, $x$, $y$ with values from a hash of the element index (exact
+multiples of $2^{-15}$ in $[-1,1)$), so the CPU can regenerate the same
+floats and compute the reference $x^TAy$ in double precision without copying
+$A$ back. Initialisation, the CPU reference and the difference are not
+timed. All arithmetic on the GPU is in \texttt{float}.
+
+\begin{enumerate}
+\item \textbf{Basic} (\texttt{q2\_v1\_basic.cu}): thread $id$ handles the
+  contiguous chunk of $mn/t$ elements starting at $id\cdot mn/t$ and
+  accumulates $x_iA_{ij}y_j$; partial sums are written to an array, copied to
+  the host and added there. Within a warp, the 32 threads access addresses
+  $4mn/t$ bytes apart: every load instruction of a warp touches 32 different
+  cache lines.
+\item \textbf{Coalesced} (\texttt{q2\_v2}): thread $id$ handles $id, id+t,
+  id+2t,\dots$; in every iteration a warp reads 32 consecutive floats of $A$
+  (one 128-byte line) and of $y$. Host merge as before.
+\item \textbf{Tree reduction} (\texttt{q2\_v3}): coalesced accumulation, then
+  a binary-tree reduction of the block's partial sums ($\log_2$ blocksize
+  halving steps separated by \texttt{\_\_syncthreads}) in a global-memory
+  scratch array; thread 0 adds the block total to the result with one
+  \texttt{atomicAdd}. Only 4 bytes are copied back.
+\item \textbf{Shared memory} (\texttt{q2\_v4}): same tree, but in a
+  \texttt{\_\_shared\_\_} array.
+\item \textbf{Additional optimisations} (\texttt{q2\_v5}): \texttt{float4}
+  loads of $A$ and $y$ (one 16-byte load per thread, 512 bytes per warp
+  instruction, $4\times$ fewer instructions/iterations), read-only cache path
+  (\texttt{\_\_ldg}, \texttt{const \_\_restrict\_\_}), loop unrolled by 2 with
+  two independent accumulators (two loads in flight per thread), and a
+  reduction with \texttt{\_\_shfl\_down\_sync} inside each warp, one
+  shared-memory slot per warp, and a final warp-shuffle reduction.
+\end{enumerate}
+The OpenMP program (\texttt{q2\_omp.c}) splits rows statically among threads,
+computes each row dot product $\sum_j A_{ij}y_j$ with an
+\texttt{omp simd reduction} loop (AVX2) and accumulates $x_i\cdot$row in a
+double \texttt{reduction(+)}; $A$ is first-touched by the same threads.
+
+\subsection{Results}
+The largest square size that fits comfortably in the 4~GB GPU is
+$m=n=2^{14}$ ($A$ is 1~GB; $2^{15}$ would need 4~GB). $x^TAy$ reads every
+element of $A$ exactly once and does only 2--3 flops per 4 bytes, so we expected
+it to be limited by memory bandwidth, and we report the achieved bandwidth
+($4(mn+m+n)$ bytes / time) relative to the \devpeakbandwidthgbs~GB/s peak.
+
+\IfFileExists{q2_results.tex}{\input{q2_results.tex}}{}
+
+\end{document}

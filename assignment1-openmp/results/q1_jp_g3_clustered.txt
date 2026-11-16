@@ -1,0 +1,3 @@
+n = 500000, m = 2874567, triangles = 3560517, |E(H)| = 19305252, threads = 8
+colors: initial = 13, final = 11, lower bound = 8
+rounds: coloring = 49, elimination passes = 6

@@ -1,0 +1,13 @@
+\begin{table}[H]\centering\small
+\caption{P1, cyclic assignment: time (ms) for $2^{22}$ inserts vs.\ total threads and block size.}\label{tab:p1cyclic}
+\begin{tabular}{lrrrrr}
+\toprule
+threads $\backslash$ block size & 64 & 128 & 256 & 512 & $2^{10}$ \\
+\midrule
+$2^{16}$ & 9555 & 12479 & 10021 & 13554 & 9320 \\
+$2^{18}$ & 6937 & 6293 & 7087 & 7479 & 5224 \\
+$2^{20}$ & 3340 & 3350 & 3207 & 3190 & 3352 \\
+$2^{22}$ & 1492 & \textbf{1461} & 1470 & 1489 & 1643 \\
+\bottomrule
+\end{tabular}
+\end{table}

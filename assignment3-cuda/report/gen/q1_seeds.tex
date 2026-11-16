@@ -1,0 +1,14 @@
+\begin{table}[H]\centering\small
+\caption{Robustness: $2^{22}$ operations generated with three different random seeds (12345, used everywhere else in this report, 2 and 3; times listed in that order). P1: dynamic chunk 1, $2^{20}$ threads; P2 static: group 32, $2^{26}$ threads; P2 dynamic: chunk 1, group 32, $2^{18}$ threads.}\label{tab:q1seeds}
+\begin{tabular}{lrrrrr}
+\toprule
+mix (i/d/s) & P1 ms & P2 static ms & P2 dynamic ms & P1/P2 & P2/P2d \\
+\midrule
+100/0/0 & 1427 / 1488 / 1406 & 342 / 447 / 364 & 266 / 333 / 268 & 3.33--4.17 & 1.28--1.36 \\
+50/0/50 & 1009 / 1275 / 1403 & 191 / 244 / 281 & 121 / 148 / 165 & 5.00--5.29 & 1.57--1.70 \\
+50/50/0 & 1152 / 871 / 1181 & 210 / 155 / 233 & 131 / 97 / 142 & 5.08--5.62 & 1.59--1.64 \\
+80/20/0 & 1240 / 1524 / 1468 & 225 / 296 / 278 & 164 / 207 / 191 & 5.15--5.51 & 1.37--1.46 \\
+80/0/20 & 1257 / 1545 / 1461 & 221 / 298 / 275 & 174 / 208 / 191 & 5.19--5.69 & 1.27--1.44 \\
+\bottomrule
+\end{tabular}
+\end{table}

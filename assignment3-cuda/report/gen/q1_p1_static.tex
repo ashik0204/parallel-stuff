@@ -1,0 +1,13 @@
+\begin{table}[H]\centering\small
+\caption{P1, static assignment: time (ms) for $2^{22}$ inserts vs.\ total threads and block size.}\label{tab:p1static}
+\begin{tabular}{lrrrrr}
+\toprule
+threads $\backslash$ block size & 64 & 128 & 256 & 512 & $2^{10}$ \\
+\midrule
+$2^{16}$ & 10468 & 10524 & 11609 & 8741 & 9356 \\
+$2^{18}$ & 6544 & 6709 & 7711 & 7836 & 5751 \\
+$2^{20}$ & 2941 & 2951 & 3022 & 2986 & 3032 \\
+$2^{22}$ & 1497 & 1517 & \textbf{1464} & 1499 & 1641 \\
+\bottomrule
+\end{tabular}
+\end{table}

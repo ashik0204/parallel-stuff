@@ -1,0 +1,11 @@
+\begin{table}[H]\centering\scriptsize\setlength{\tabcolsep}{3pt}
+\caption{Best CUDA program (v5) vs.\ best OpenMP program. Speedup = OpenMP time / CUDA time.}\label{tab:q2compare}
+\begin{tabular}{rrr|rrrrr|rrr|r}\toprule
+$m$ & $n$ & A (MB) & $t$ & bs & CUDA ms & GB/s & $|$diff$|$ & OMP thr. & OMP ms & GB/s & speedup \\\midrule
+$2^{10}$ & $2^{10}$ & 4 & $2^{16}$ & 512 & 0.045 & 92.38 & 1.2e-04 & 8 & 0.045 & 93.36 & 1.0 \\
+$2^{12}$ & $2^{12}$ & 64 & $2^{16}$ & 512 & 0.413 & 162.58 & 4.1e-05 & 4 & 1.937 & 34.66 & 4.7 \\
+$2^{13}$ & $2^{13}$ & 256 & $2^{14}$ & 256 & 1.585 & 169.39 & 9.9e-04 & 4 & 7.187 & 37.36 & 4.5 \\
+$2^{14}$ & $2^{14}$ & 1024 & $2^{18}$ & 1024 & 6.270 & 171.27 & 1.3e-03 & 4 & 26.73 & 40.18 & 4.3 \\
+$2^{12}$ & $2^{16}$ & 1024 & $2^{14}$ & 1024 & 6.268 & 171.36 & 6.4e-05 & 4 & 27.94 & 38.44 & 4.5 \\
+$2^{16}$ & $2^{12}$ & 1024 & $2^{18}$ & 1024 & 6.268 & 171.34 & 1.5e-03 & 4 & 27.07 & 39.68 & 4.3 \\
+\bottomrule\end{tabular}\end{table}

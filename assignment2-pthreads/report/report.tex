@@ -1,0 +1,238 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=2cm]{geometry}
+\usepackage{graphicx,booktabs,amsmath,hyperref,enumitem,listings,xcolor}
+\usepackage[T1]{fontenc}
+\lstset{basicstyle=\ttfamily\footnotesize,columns=fullflexible,frame=single,framerule=0.3pt,
+        keywordstyle=\bfseries,language=C++,showstringspaces=false}
+\setlist{nosep,leftmargin=1.5em}
+\hypersetup{colorlinks,linkcolor=blue!50!black,urlcolor=blue!50!black}
+
+\title{CS433 Assignment 2: Report\\\large Group \#1}
+\author{Ashik Stenny \and Spandan Pati \and Vedhanth Balasubramanian}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Files and build}
+We submit two source files. Each one builds several programs, selected with a compile-time flag:
+\begin{itemize}
+\item \texttt{q1\_mpsc.cpp} (Question 1), versions P1--P4:\\
+      \texttt{g++ -O2 -DVERSION=k -o q1\_pk q1\_mpsc.cpp -lpthread} \quad ($k = 1..4$)\\
+      Usage: \texttt{./q1\_pk N P n}. The consumed values go to standard output; a summary line with the time goes to standard error.
+\item \texttt{q2\_graph.cpp} (Question 2), versions P1--P6:\\
+      \texttt{g++ -O2 -DVERSION=k -o q2\_pk q2\_graph.cpp -lpthread} \quad ($k = 1..6$)\\
+      Usage: \texttt{./q2\_pk op\_file op\_count num\_threads}, which reads the first \texttt{op\_count} lines of \texttt{op\_file}.\\
+      The operation-file generator is in the same file:\\
+      \texttt{g++ -O2 -DGEN\_OPS -o gen\_graph\_ops q2\_graph.cpp -lpthread}\\
+      Usage: \texttt{./gen\_graph\_ops op\_count ins\% del\% num\_vertices out\_file [seed]}, e.g.\ \texttt{./gen\_graph\_ops 4000000 30 30 10000 ops.txt}.
+\end{itemize}
+The FIFO/fairness test program and the benchmark and plotting scripts that we used for the experiments are not part of the submission.
+Only POSIX threads and standard C/C++ are used. Every program checks its own output after the timed region
+(Q1: every value consumed exactly once and in per-producer order; Q2: every list strictly sorted and
+the final edge count equal to initial edges + successful inserts $-$ successful deletes). All runs reported below passed these checks.
+
+\paragraph{Platform.} AMD Ryzen 7 5800HS (8 cores, 16 hardware threads, one socket, 16\,MB L3), Linux 6.17, g++ 15.2, \texttt{-O2}.
+Each configuration was run 3 times and the median is reported. Time is measured with \texttt{gettimeofday} around thread creation,
+the parallel work and the joins only. Allocating and initialising data structures, reading the op file, building the initial graph,
+printing and checking are all outside the timed region.
+
+%=====================================================================
+\section{Question 1: lock-free FIFO semaphore and multi-producer single-consumer}
+
+\subsection{The lock-free semaphore (P1)}
+The only atomic primitive is the class's \texttt{CompareAndSet} (\texttt{lock cmpxchgl}). From it we build a lock-free
+\texttt{FetchAndInc}: read the value, CAS it to value$+1$, retry if the CAS fails. A failed CAS means another
+thread's CAS succeeded, so the system as a whole always makes progress (lock-free). No lock is built from the CAS.
+
+The semaphore is a \emph{ticket semaphore} with two counters:
+\begin{itemize}
+\item \texttt{ticket}: the number of \texttt{wait} calls that have started;
+\item \texttt{grant}: the initial value plus the number of \texttt{post} calls that have completed.
+\end{itemize}
+\begin{lstlisting}
+wait:  t = FetchAndInc(&ticket);  while (grant <= t) back_off(t - grant);
+post:  FetchAndInc(&grant);
+\end{lstlisting}
+The semaphore's value is $\texttt{grant}-\texttt{ticket}$; when it is negative, its magnitude is the number of threads waiting.
+A waiter holding ticket $t$ passes once $t$ is below \texttt{grant}. Tickets are handed out in the order the \texttt{wait}
+calls linearise (their successful CAS), and \texttt{grant} only grows, so if $t_1 < t_2$ the holder of $t_1$ is allowed through no later than
+the holder of $t_2$. \textbf{Waiters are therefore granted the resource in FIFO order}, and every post releases exactly one waiter (or one future waiter),
+just like \texttt{sem\_post}. Comparisons use the wrapped difference \texttt{(int)(t - grant)}, so counter overflow is harmless.
+\texttt{wait} busy-waits and never yields the CPU, as the assignment asks.
+
+\textbf{Interface.} \texttt{my\_sem\_init} allocates the two counters internally on separate 64-byte cache lines (\texttt{aligned\_alloc}) and sets them;
+\texttt{my\_sem\_destroy} frees them. No per-waiter memory is needed, unlike queue-based designs, so \texttt{wait}/\texttt{post} never allocate.
+
+\textbf{Optimisations.}
+\begin{itemize}
+\item \emph{No false sharing between the counters}: arriving waiters CAS \texttt{ticket} while earlier waiters spin reading \texttt{grant};
+      keeping them on separate cache lines means the spinners are not disturbed by arrivals.
+\item \emph{Spinning is read-only}: a waiter only reads \texttt{grant}, so it spins on its locally cached copy and generates no coherence traffic until a post changes it.
+\item \emph{Proportional back-off}: a waiter that is $k$ places from the front executes about $k$ \texttt{pause} instructions between reads,
+      so threads far back in the queue poll less often. \texttt{pause} also stops the spinning hyperthread from slowing its sibling.
+\end{itemize}
+
+\subsection{The other three semaphores}
+\begin{description}
+\item[P2, lock-based busy-waiting semaphore.] An integer count protected by a cmpxchg spin lock.
+  \texttt{wait} first spins \emph{without} the lock until \texttt{count > 0}, then takes the lock, re-checks, decrements and releases (retrying if another thread was first).
+  \texttt{post} takes the lock and increments. This semaphore is not FIFO.
+
+  \emph{Optimisation.} With a plain test-and-set lock, \texttt{while (!CompareAndSet(0, 1, lock));}, every waiting thread keeps executing a locked
+  \texttt{cmpxchg}, and we expected the lock's cache line to keep moving between the waiting cores. We therefore used \emph{test-and-test-and-set}:
+  a waiter spins on an ordinary read and tries the CAS only when the lock looks free, and after a failed CAS it backs off exponentially
+  (1, 2, 4, \ldots, up to 256 \texttt{pause}s). Compared with plain test-and-set ($N=64$, $nP=4$M, median of 3 runs), we saw no difference at $P=4$
+  (1.56\,s vs 1.57\,s), but it was 22\% faster at $P=8$ (5.31\,s $\to$ 4.14\,s) and 37\% faster at $P=15$ (8.34\,s $\to$ 5.29\,s).
+\item[P3, Linux semaphore.] \texttt{sem\_t} with \texttt{sem\_init/sem\_wait/sem\_post/sem\_destroy}. Uncontended operations are a single atomic instruction in user space;
+  a thread that must wait sleeps in the kernel on a futex.
+\item[P4, condition variable.] A counting semaphore built from \texttt{pthread\_cond\_t}: the mutex protects only the condition variable's predicate (the count)
+  and a count of sleepers. \texttt{wait} sleeps on the condition variable while the count is 0. \texttt{post} increments and signals, skipping the signal when nobody sleeps.
+  No other locks are used.
+\end{description}
+
+\subsection{Multi-producer single-consumer program}
+The class's single-producer single-consumer program used two semaphores: \texttt{sem\_prod} (empty slots, initially $N$) and \texttt{sem\_cons} (full slots, initially 0).
+With several producers, two more problems have to be solved without locks:
+\begin{enumerate}
+\item \emph{Two producers must not write the same slot.} After \texttt{wait(sem\_prod)}, a producer claims a slot with \texttt{idx = FetchAndInc(\&write\_pointer) mod N}
+      (lock-free). Since at most $N$ producers are past \texttt{wait(sem\_prod)} with an unconsumed slot, the claimed slot has always been consumed already,
+      so no unread slot is overwritten.
+\item \emph{Slots can be finished out of order.} Producer A may claim slot $i$ and producer B slot $i{+}1$, but B may finish and post first.
+      The consumer then sees \texttt{sem\_cons} $>0$ while slot $i$ (the one it reads next) is still being written. So each slot also has a \texttt{full} flag:
+      the producer writes the value, then sets \texttt{full}=1 (a compiler barrier plus x86's in-order stores make the value visible first);
+      the consumer, after \texttt{wait(sem\_cons)}, also waits for \texttt{array[read\_pointer].full}, reads the value, clears the flag and posts \texttt{sem\_prod}.
+      The wait is always short: slot $i$ was claimed before slot $i{+}1$, by a producer that is already past its semaphore wait.
+\end{enumerate}
+The \texttt{full} flag is not a lock: no thread acquires or releases it, and it never keeps a thread out of a critical section. It is a one-way signal from the one producer
+that claimed the slot to the consumer. The two semaphores prevent overwriting an unread slot; the flag only prevents the consumer from reading a slot too early.
+To check that the flag is needed, we removed the consumer's wait on it in a test copy of P1: with one producer all 100 runs were still correct
+(slots always finish in claim order), but with 8 producers 86 of 100 runs failed the output check.
+The consumer reads slots in claim order, and each producer claims its slots in the order it produces. So each producer's values reach the consumer in production order,
+and the program checks this. Producer $p$ produces $p\cdot n, \ldots, p\cdot n + n - 1$.
+
+The consumer runs on the main thread. It stores the consumed values in a preallocated array, and they are printed (one per line) after the timer is stopped,
+so the measured time is the producer-consumer exchange rather than \texttt{printf}.
+Each slot is padded to a 64-byte cache line so that producers filling neighbouring slots do not falsely share a line with each other or with the consumer.
+In the same way, \texttt{write\_pointer}, \texttt{sem\_prod} and \texttt{sem\_cons} each get their own cache line, apart from each other and from \texttt{N}, \texttt{n} and \texttt{array},
+which every thread reads for every value (the effect of this is in Section~1.4).
+All four programs share this code and differ only in the semaphore, so the comparison isolates the semaphore.
+
+\paragraph{Why the compiler barriers are needed: an experiment.}
+We use the class's \texttt{CompareAndSet} unchanged. Its \texttt{lock} prefix orders memory for the \emph{hardware}, but nothing tells the \emph{compiler}
+that other threads change \texttt{grant} or a slot's \texttt{full} flag, or that ordinary loads and stores must not move across a synchronisation point.
+So, as the class code does before releasing a lock, we add compiler barriers (\texttt{asm("":::"memory")}) around \texttt{FetchAndInc} and the flag updates,
+and read and write the shared counters and flags through \texttt{volatile}. To check what each of these does, we built P1 four ways and stress-tested each
+(200 runs, $P=8$, $N=1..8$, $n=20{,}000$, \texttt{g++ -O2}):
+
+\begin{center}\small
+\begin{tabular}{llr}
+\toprule
+Variant & Removed & Result \\
+\midrule
+A (our code) & nothing & 200/200 correct \\
+B & compiler barriers & 200/200 correct \\
+C & barriers and \texttt{volatile} & 200/200 correct \\
+D & barriers, \texttt{volatile} and \texttt{pause} & \textbf{0/200 correct (all fail the check)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Looking at the generated assembly for D, we found that the compiler had \emph{removed both waiting loops}: it treated \texttt{grant} and \texttt{full}
+as unchanging while a thread spins (as far as we understand, C++ allows it to assume that a loop without side effects terminates). So \texttt{wait} no longer waits, and the consumer
+reads slots before they are written. C still worked, but from the assembly this seems to be only because GCC reloads memory after the \texttt{pause} instruction, which we do not think is guaranteed.
+For B, GCC produced the same order of memory operations as for A (claim slot, write value, set \texttt{full}, post), so with this compiler and optimisation level the barriers
+did not fix a visible bug; B also passed 100/100 runs at \texttt{-O3}. We kept the barriers anyway, since they cost nothing measurable
+(0.75--0.81\,s for A vs 0.86--0.88\,s for B at $N=64$, $P=8$, $nP=4$M, measured before the padding of the shared variables described above) and we did not want correctness to depend on what a particular compiler version emits.
+
+\subsection{Results}
+\input{q1_results}
+
+%=====================================================================
+\section{Question 2: concurrent graph as an array of linked lists}
+
+\subsection{Data structure and setup}
+The graph has $n = 10{,}000$ vertices. \texttt{list[u]} is a \emph{sentinel} node (value $-1$) followed by the sorted list of the out-neighbours of $u$.
+The sentinel is never deleted, so every list starts with a node that has a lock, and there is no separate \texttt{head} pointer that could change
+between reading it and locking the node it points to.
+
+\textbf{Initial graph.} $m = 500{,}000$ distinct directed edges are drawn from a fixed seed (\texttt{GRAPH\_SEED}), so the initial graph is the same in every run.
+The average out-degree is 50 and the density is 0.5\%, far from complete. Each list is laid out in sorted order in one contiguous array of nodes.
+
+\textbf{Operation list.} \texttt{gen\_graph\_ops} writes lines \texttt{op u v} with $u \ne v$ uniform in $[0,n)$.
+It fills an array with the exact number of each op type and Fisher--Yates shuffles it, so the three types are \emph{uniformly mixed} over the whole list
+(drawing a random type until each quota runs out would leave only the last remaining type at the end of the file).
+We used 3 mixes $\times$ 3 sizes (1M, 2M, 4M operations), each with its own file.
+
+\textbf{Work distribution.} As in the class programs, thread $i$ executes the contiguous block $[\,i\cdot\frac{ops}{T}, (i{+}1)\cdot\frac{ops}{T})$ of the op list.
+Remainders are handled, so any $T$ works. With $T=1$ every version runs the lock-free sequential code (the class's convention), which gives the sequential baseline.
+
+\textbf{No allocation while timing.} Before the timer starts, each thread gets a \emph{node pool} sized to the number of inserts in its block, with the locks already initialised
+(\texttt{pthread\_mutex\_init}, \texttt{pthread\_rwlock\_init} or 0). An insert just takes the next node from its own pool, with no \texttt{malloc} and no shared allocator.
+Deleted nodes are not freed during the run. P6 needs this, because a thread walking without locks may still be on a deleted node; we do the same in all versions to keep
+them comparable, and all memory is freed after the timer stops.
+
+\subsection{The six versions}
+\begin{description}
+\item[P1, one mutex for the graph.] Each operation runs the sequential list code inside one global \texttt{pthread\_mutex}.
+\item[P2, one mutex per list.] \texttt{list\_lock[u]} protects list $u$. Each lock is padded to a cache line, so locks of different lists do not falsely share.
+\item[P3, one mutex per node, hand-over-hand.] The walk holds the lock of \texttt{prev}. To step forward it locks \texttt{curr} and only then releases \texttt{prev}.
+  While \texttt{prev} is held, \texttt{curr} cannot be unlinked (that needs \texttt{prev}'s lock) and nothing can be inserted in front of it, so its value can be read safely.
+  \emph{Insert and search only need \texttt{prev}} locked at the end of the walk; only delete
+  also locks the victim (so that no one is inserting right after it). This saves one lock/unlock pair per insert and search.
+\item[P4, one read/write lock per node.] Search walks hand-over-hand with \emph{read} locks only, so concurrent searches share nodes.
+  Insert and delete also walk with \emph{read} locks and take a \emph{write} lock only on the node they
+  expect to be the final predecessor. A read lock cannot be upgraded to a write lock (two readers trying to upgrade would wait for each other forever),
+  so the lock type has to be chosen before locking: they peek at \texttt{node->next} without a lock, which is safe because nodes are never freed during the run.
+  This prediction is checked once the lock is held. If it was wrong because the list changed in between (a read-locked node turns out to be the predecessor), the
+  operation releases its lock and redoes the walk with write locks on every node, which always succeeds. So almost every operation takes a single write lock.
+  Compared with taking write locks all the way down (4M ops, median of 3), this was 6--10\% faster on the 80\% insert mix (at $T=16$: 4.91\,s $\to$ 4.43\,s),
+  about 5\% faster on 30/30/40 and about 3\% faster on 10/10/80, which fits with only inserts and deletes benefiting from it.
+\item[P5, one cmpxchg spin lock per node.] The same hand-over-hand algorithm as P3, with a cmpxchg spin lock (also used by P6).
+  \emph{Optimisation:} as in Question 1, the lock is test-and-test-and-set instead of a CAS in a loop: a waiter spins on an ordinary
+  read of the lock word, with the \texttt{pause} instruction, and attempts the CAS only when the lock looks free. Spinning on a read keeps the line in the
+  waiter's cache instead of pulling it away from the holder on every iteration. \texttt{pause} also stops a spinning thread from slowing down the other
+  hardware thread on the same core. Unlike in Question 1, we did not measure a significant difference from plain test-and-set here (30/30/40, 4M ops, $T=8,16,32$:
+  all within run-to-run noise). We think this is because, with 10{,}000 lists, a node's lock is rarely contended, so there is little spinning to save,
+  and for the same reason we did not add back-off.
+\item[P6, optimistic locking.] Walk with no locks, lock what will be modified, then \emph{validate}
+  (\texttt{!prev->deleted \&\& prev->next == curr}, plus \texttt{!curr->deleted} for delete) and retry if validation fails. Delete marks the node
+  (\texttt{deleted = 1}) before unlinking it.
+  \begin{itemize}
+  \item insert, and a delete that does not find the edge, lock only \texttt{prev} (\texttt{prev->next} is the only pointer they rely on);
+  \item search takes no locks: it walks and reports the edge only if the node is not marked deleted;
+  \item \texttt{CompareAndSet} does not tell the compiler that it orders memory, so the compiler could reuse
+        \texttt{prev->next} or \texttt{deleted} loaded \emph{before} the lock, and validation would then pass on stale values. So, as the class code does
+        before releasing a lock, we put a compiler barrier (\texttt{asm("":::"memory")}) after acquiring and before releasing.
+        We also use volatile loads for the lock-free walk, and put a barrier before publishing a new node, so its fields are written before \texttt{prev->next} points to it
+        (x86 keeps stores in order, so no hardware fence is needed).
+  \end{itemize}
+\end{description}
+
+\subsection{Optimisations (summary)}
+\begin{itemize}
+\item \textbf{Sentinel head per list:} every list starts with a lockable node, with no head pointer to protect.
+\item \textbf{Fewer locks per operation (P3, P5, P6):} insert holds only \texttt{prev} instead of \texttt{prev} and \texttt{curr}, and in P3/P5 the walk holds one lock instead of two; only delete also locks the victim.
+\item \textbf{Read-lock walk for writers (P4):} insert/delete take a single write lock, on the last predecessor; 3--10\% faster.
+\item \textbf{Lock-free search (P6).}
+\item \textbf{Test-and-test-and-set spin lock (P5, P6).}
+\item \textbf{Per-thread node pools:} no \texttt{malloc} or lock initialisation while timing, and no shared allocator.
+\item \textbf{Initial lists laid out contiguously in sorted order}, for better locality.
+\item \textbf{Cache-line padding} of everything that threads write during the run and that would otherwise share a line: per-list locks (P2), list heads (whose locks every operation on that list takes in P3--P6), P1's global lock, the per-thread pool counters and the per-thread result counters.
+  We added the last three paddings after the main sweep; rerunning both mixes at 2M ops with 1--32 threads (3 runs each), we saw no difference beyond run-to-run noise, so the tables below are from the earlier build.
+\item \textbf{Uniformly shuffled operation list} and work split that handles any thread count.
+\end{itemize}
+
+\subsection{Results}
+\input{q2_results}
+
+\appendix
+\section{All Question 2 timings}
+\label{app:q2}
+Median of 3 runs, in ms. Bold marks the fastest version for each operation count and thread count.
+
+\begin{center}\scriptsize
+\input{tables/q2_full.tex}
+\end{center}
+
+\end{document}

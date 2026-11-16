@@ -1,0 +1,14 @@
+\begin{table}[H]\centering\small
+\caption{P2 with dynamic group assignment: time (ms) vs.\ chunk size and total threads (group 32, block size 128, $2^{22}$ inserts). Compare the static column of Table~\ref{tab:p2group}.}\label{tab:p2dynchunk}
+\begin{tabular}{lrrrrr}
+\toprule
+chunk $\backslash$ threads & $2^{16}$ & $2^{18}$ & $2^{20}$ & $2^{22}$ & $2^{24}$ \\
+\midrule
+1 & 266.3 & \textbf{259.5} & 260.1 & 261.7 & 266.5 \\
+2 & 297.5 & 303.9 & 301.4 & 299.5 & 297.3 \\
+4 & 345.4 & 340.0 & 335.6 & 338.7 & 341.7 \\
+8 & 412.7 & 413.8 & 410.8 & 414.3 & 417.0 \\
+16 & 546.6 & 559.1 & 551.8 & 554.0 & 554.0 \\
+\bottomrule
+\end{tabular}
+\end{table}

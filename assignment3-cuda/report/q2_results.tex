@@ -1,0 +1,96 @@
+\subsubsection*{Basic program: thread count and thread hierarchy}
+\inputif{q2_basic.tex}
+\inputif{q2_basic_bs.tex}
+
+Tables~\ref{tab:q2basic} and~\ref{tab:q2basicbs} show the basic program for
+$m=n=2^{14}$. The best configuration is $t=$\,\qtwobasicbestt{} threads in blocks of
+\qtwobasicbestbs{} (\qtwobasicbestms~ms).
+\begin{itemize}
+\item \textbf{Up to $2^{10}$ threads} the time halves every time $t$ doubles, and it
+  flattens out between $2^{11}$ and $2^{12}$.
+  There are too few threads to hide the DRAM latency: with $t\le 2^{10}$ there
+  are at most 32 warps on 16 SMs, so most SMs have one or two warps, and each
+  warp stalls for hundreds of cycles on every load.
+\item \textbf{$2^{12}$--$2^{13}$ threads}: the time flattens at about 16.6--17~ms,
+  i.e.\ roughly 64~GB/s, which is only about 37\% of peak. A warp load touches 32 different
+  cache lines (one per thread, $4mn/t$ bytes apart). We think it reaches even
+  this only because each thread walks sequentially through its chunk, so after the first
+  miss the next 31 loads of the same thread hit the same 128-byte line in L1.
+\item \textbf{Block size matters a lot beyond $2^{13}$ threads}. With blocksize 32 the time stays at 16--17~ms
+  up to $2^{17}$ threads, while every larger block size jumps to 26--32~ms.
+  Our explanation is the L1 working set (we did not measure cache hit rates
+  with a profiler, so this is only an estimate from the cache sizes). Each resident warp keeps 32 lines
+  (4~KB) live in L1. An SM can hold 48 warps (1536 threads), which is a 192~KB
+  working set, larger than the 128~KB L1/shared array, so lines are evicted
+  before their 32 elements are consumed and are fetched again. With 32-thread
+  blocks the limit of 16 blocks per SM (compute capability 8.6) caps
+  residency at 16 warps per SM (64~KB), which fits in L1. So here lower occupancy
+  seems to help, because it avoids cache thrashing. For $t\le 2^{13}$ there are
+  at most 16 warps per SM anyway, so there the block size matters only when there are
+  fewer blocks than SMs: with $t=2^{13}$ and 1024-thread blocks, or $t=2^{12}$ and
+  512-thread blocks, only 8 blocks exist, so only 8 of the 16 SMs work (30.9 and
+  31.1~ms instead of about 17~ms).
+\item \textbf{Very large $t$} ($\ge 2^{19}$) is slower again. The chunks get short
+  (512 elements and less), and the program has to copy $t$ partial
+  sums to the host and add them there. Table~\ref{tab:q2trend} shows this cost:
+  versions 2 and 3 differ only in the merge, and the gap grows with $t$.
+\end{itemize}
+
+\subsubsection*{Effect of the optimisations}
+\inputif{q2_versions.tex}
+\inputif{q2_trend.tex}
+
+\begin{itemize}
+\item \textbf{Coalescing} is the big step: $2.5\times$ over the best basic
+  configuration (16.6~ms $\to$ 6.6~ms). Each warp load
+  is now one 128-byte transaction that is fully used, so the program reaches
+  about 160~GB/s, which is 92\% of peak. Coalescing needs enough threads
+  (Table~\ref{tab:q2trend}). With $t\le 2^{12}$ the coalesced version is
+  \emph{slower} than the basic one, because each thread then issues one independent
+  load per iteration and there are not enough warps to keep enough requests in
+  flight to cover the DRAM latency. The basic version is helped there by its L1 hits.
+\item \textbf{Tree reduction} on the GPU removes the copy of $t$ partial sums
+  and the serial host merge. At the thread count where coalescing is best the gain is
+  small (the merge of $2^{16}$ floats is cheap; at $2^{14}$ threads the global-memory tree
+  with its $\log_2(\text{blocksize})$ barrier steps is even slightly slower than the host merge), but the gain grows quickly
+  with $t$ ($2^{22}$ threads: 13.1~ms $\to$ 6.7~ms). So with the tree reduction
+  the best time no longer depends much on $t$.
+\item \textbf{Shared memory} for the tree changes little (1.6--6\%). The
+  reduction is $\log_2(\text{blocksize})$ steps over at most 1024 values once
+  per block, which is negligible compared with streaming 1~GB from DRAM. Its
+  global-memory version mostly hits in L1/L2 anyway. Shared memory helps most
+  at large $t$, where there are many blocks and therefore many reductions.
+\item \textbf{float4 + ILP + warp shuffle} gives the best time and,
+  more importantly, reaches it at only $2^{12}$--$2^{13}$ threads. Each load
+  instruction moves 16 bytes per thread, and two independent loads per thread are in
+  flight, so fewer warps can still keep the memory system busy. The
+  shuffle reduction needs no shared memory and only one \texttt{\_\_syncthreads}.
+\end{itemize}
+All optimised versions converge to 6.3--6.6~ms $\approx$ 160--171~GB/s; the best (v5,
+\qtwovfivems~ms) reaches \qtwovfivegbps~GB/s, i.e.\ 97\% of the \devpeakbandwidthgbs~GB/s peak. Since
+the kernel is limited by memory bandwidth, we do not expect further optimisations
+to gain much; we think the remaining few percent are lost to things like DRAM
+refresh and the start and end of the kernel. The numerical difference from the double-precision CPU result is about
+$10^{-4}$--$10^{-3}$ for a result of magnitude $\approx 3300$ (relative error
+$10^{-7}$--$10^{-6}$). The difference changes between versions because the order of
+the float additions changes; it looks like versions that sum many short partial sums
+(large $t$) are more accurate than those with long sequential float accumulations
+(small $t$).
+
+\subsubsection*{Best CUDA program vs.\ OpenMP}
+\inputif{q2_compare.tex}
+\inputif{q2_omp.tex}
+
+The best CUDA program (v5, tuned per size) is \qtwospeedupmin--\qtwospeedupmax$\times$
+faster than the best OpenMP program (Table~\ref{tab:q2compare}). For every matrix of
+64~MB or more the speedup is about $4.3$--$4.7\times$, and it is the same for
+square, wide ($2^{12}\times2^{16}$) and tall ($2^{16}\times2^{12}$)
+matrices. Both programs seem to be limited by memory bandwidth, so the speedup is roughly
+the ratio of the achieved memory bandwidths: about 170~GB/s on the GPU's GDDR6 against 35--40~GB/s
+on the CPU's DDR4 (Table~\ref{tab:q2omp}). The CPU seems to reach its memory
+bandwidth limit with only 2--4 threads (2 and 4 threads give almost the same time); more threads only seem to add contention and
+synchronisation (the 16-thread runs are slower, and for the smallest size the
+fork/join cost of 16 threads dominates). For the smallest matrix
+($2^{10}\times2^{10}$, 4~MB) there is no gain (both take about 45~$\mu$s): the run time is
+tens of microseconds, so we think kernel-launch and copy latency dominate, while the
+CPU's 4~MB working set stays in its 16~MB L3 cache between repetitions.
